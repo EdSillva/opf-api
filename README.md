@@ -41,6 +41,14 @@ Este script irá:
 Após treinar o modelo:
 
 ```bash
+// inicialização do ambiente python
+python3 -m venv venv
+
+// ativação do ambiente
+source venv/bin/activate  # Linux/Mac
+venv\Scripts\activate     # Windows
+
+// rodar o app
 python run.py
 ```
 
