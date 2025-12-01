@@ -4,3 +4,5 @@ pyspark
 pydantic
 pandas
 pyarrow
+scikit-learn
+joblib
