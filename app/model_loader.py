@@ -108,6 +108,9 @@ def predict_sklearn(model_obj: Any, client: Dict[str, Any]) -> Dict[str, Any]:
     """
     import pandas as pd
     import numpy as np
+    import logging
+    
+    logger = logging.getLogger(__name__)
     
     feature_cols: List[str] = model_obj.get('feature_columns') or []
     model_skl = model_obj.get('model')
@@ -115,8 +118,28 @@ def predict_sklearn(model_obj: Any, client: Dict[str, Any]) -> Dict[str, Any]:
     categorical_cols = model_obj.get('categorical_cols', [])
     numeric_cols = model_obj.get('numeric_cols', [])
     
+    logger.info(f'Feature columns count: {len(feature_cols)}')
+    logger.info(f'Categorical cols: {categorical_cols}')
+    logger.info(f'Numeric cols: {numeric_cols}')
+    
     if model_skl is None or not feature_cols:
         raise RuntimeError('Invalid sklearn model object')
+
+    # Helper para buscar valor com várias variações de chave
+    def get_value(col_name):
+        # Tenta com o nome original
+        val = client.get(col_name)
+        if val is not None:
+            return val
+        # Tenta com underscore
+        val = client.get(col_name.replace(' ', '_'))
+        if val is not None:
+            return val
+        # Tenta com espaço (inverso)
+        val = client.get(col_name.replace('_', ' '))
+        if val is not None:
+            return val
+        return None
 
     # Constrói vetor de features
     feature_values = []
@@ -125,9 +148,11 @@ def predict_sklearn(model_obj: Any, client: Dict[str, Any]) -> Dict[str, Any]:
     for col in categorical_cols:
         col_idx = col + "_idx"
         if col_idx in feature_cols:
-            raw_value = client.get(col) or client.get(col.replace(' ', '_'))
+            raw_value = get_value(col)
             if raw_value is None:
                 raw_value = '_MISSING_'
+            
+            logger.info(f'Categorical {col}: {raw_value}')
             
             # Usa o encoder treinado
             encoder = encoders.get(col)
@@ -142,16 +167,23 @@ def predict_sklearn(model_obj: Any, client: Dict[str, Any]) -> Dict[str, Any]:
             else:
                 feature_values.append(0)
     
+    logger.info(f'After categorical: {len(feature_values)} features')
+    
     # Depois, as numéricas
     for col in numeric_cols:
         if col in feature_cols:
-            raw_value = client.get(col) or client.get(col.replace(' ', '_'))
+            raw_value = get_value(col)
+            logger.info(f'Numeric {col}: {raw_value}')
             try:
                 feature_values.append(float(raw_value) if raw_value is not None else 0.0)
             except (ValueError, TypeError):
                 feature_values.append(0.0)
     
+    logger.info(f'Final feature count: {len(feature_values)}')
+    logger.info(f'Feature values: {feature_values}')
+    
     X = np.array([feature_values])
+    logger.info(f'X shape: {X.shape}')
     
     proba = None
     if hasattr(model_skl, 'predict_proba'):
