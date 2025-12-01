@@ -25,7 +25,7 @@ app.add_middleware(
 )
 
 # Registrar rotas
-app.include_router(predict_router, prefix="/predict", tags=["Predictions"])
+app.include_router(predict_router, prefix="/predict/sklearn", tags=["Predictions"])
 app.include_router(data_router, prefix="/data", tags=["Data"])
 app.include_router(predict_sklearn_router, prefix="/predict", tags=["Predictions"])
 
