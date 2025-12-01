@@ -104,11 +104,49 @@ def get_clients_data(limit: int = 1000, offset: int = 0):
     try:
         # Carregar dados do parquet
         parquet_path = os.environ.get('PARQUET_PATH', 'dataset_processado_opf.parquet')
+        csv_path = os.environ.get('PARQUET_FALLBACK_CSV', 'data/features.csv')
 
-        # Quick checks: ensure parquet file exists on disk before trying to start Spark
+        # If parquet doesn't exist, try CSV fallback immediately
         if not os.path.exists(parquet_path):
-            logger.error("Parquet file not found at path: %s", parquet_path)
-            raise HTTPException(status_code=404, detail=f"Arquivo {parquet_path} não encontrado no servidor")
+            logger.warning("Parquet file not found at path: %s; trying CSV fallback", parquet_path)
+            if os.path.exists(csv_path):
+                logger.info('Using CSV fallback for clients: %s', csv_path)
+                pdf = pd.read_csv(csv_path)
+                # select only the needed columns that exist
+                needed_cols = [
+                    'Estado', 'Faixa etária', 'Sexo', 'Escolaridade', 'Renda', 'Gp renda',
+                    'Gp gasto mensal', 'Gp score de crédito', 'Adesao_ao_OPF', 'Usa_pix',
+                    'Usa_eBanking', 'Usa_app_banco'
+                ]
+                existing_cols = [c for c in needed_cols if c in pdf.columns]
+                rows = pdf[existing_cols].iloc[offset:offset+limit].to_dict(orient='records')
+                data = []
+                for rec in rows:
+                    rec_js = make_json_serializable(rec)
+                    underscored = {k.replace(' ', '_'): v for k, v in rec_js.items()}
+                    if isinstance(rec_js, dict):
+                        rec_js.update(underscored)
+                    data.append(rec_js)
+
+                total = int(len(pdf))
+                aderiu = int(pdf['Adesao_ao_OPF'].fillna(0).astype(int).sum()) if 'Adesao_ao_OPF' in pdf.columns else 0
+                nao_aderiu = total - aderiu
+
+                payload = {
+                    "success": True,
+                    "total_records": int(total),
+                    "returned_records": int(len(data)),
+                    "statistics": {
+                        "total": int(total),
+                        "aderiu": int(aderiu),
+                        "nao_aderiu": int(nao_aderiu),
+                        "taxa_adesao": round((aderiu / total) * 100, 2) if total > 0 else 0
+                    },
+                    "data": data
+                }
+                return JSONResponse(content=payload)
+            else:
+                raise HTTPException(status_code=404, detail=f"Parquet e CSV fallback não encontrados no servidor")
 
         # try importing pyspark availability via get_spark (which lazy-imports pyspark)
         try:
@@ -254,10 +292,53 @@ def get_statistics():
     """
     try:
         parquet_path = os.environ.get('PARQUET_PATH', 'dataset_processado_opf.parquet')
+        csv_path = os.environ.get('PARQUET_FALLBACK_CSV', 'data/features.csv')
 
+        # If parquet doesn't exist, try CSV fallback immediately
         if not os.path.exists(parquet_path):
-            logger.error("Parquet file not found at path: %s", parquet_path)
-            raise HTTPException(status_code=404, detail=f"Arquivo {parquet_path} não encontrado no servidor")
+            logger.warning("Parquet file not found at path: %s; trying CSV fallback", parquet_path)
+            if os.path.exists(csv_path):
+                logger.info('Using CSV fallback for stats: %s', csv_path)
+                pdf = pd.read_csv(csv_path)
+                total = int(len(pdf))
+                aderiu = int(pdf['Adesao_ao_OPF'].fillna(0).astype(int).sum()) if 'Adesao_ao_OPF' in pdf.columns else 0
+                nao_aderiu = total - aderiu
+
+                por_estado = []
+                if 'Estado' in pdf.columns:
+                    grp = pdf.groupby('Estado')
+                    for k, g in grp:
+                        ader = int(g['Adesao_ao_OPF'].fillna(0).astype(int).sum()) if 'Adesao_ao_OPF' in g.columns else 0
+                        nao = int(len(g) - ader)
+                        por_estado.append({'Estado': k, 'aderiu': int(ader), 'nao_aderiu': int(nao), 'count': int(len(g))})
+
+                # faixa etaria
+                por_faixa_etaria = []
+                if 'Faixa etária' in pdf.columns:
+                    fe = pdf['Faixa etária'].value_counts().to_dict()
+                    por_faixa_etaria = [{'Faixa etária': k, 'count': int(v)} for k, v in fe.items()]
+
+                # renda
+                por_renda = []
+                if 'Gp renda' in pdf.columns and 'Adesao_ao_OPF' in pdf.columns:
+                    grp = pdf.groupby(['Gp renda', 'Adesao_ao_OPF']).size().reset_index(name='count')
+                    por_renda = grp.to_dict(orient='records')
+
+                payload = {
+                    "success": True,
+                    "geral": {
+                        "total_clientes": int(total),
+                        "aderiu": int(aderiu),
+                        "nao_aderiu": int(nao_aderiu),
+                        "taxa_adesao": round((aderiu / total) * 100, 2) if total > 0 else 0
+                    },
+                    "por_estado": [make_json_serializable(r) for r in por_estado],
+                    "por_faixa_etaria": [make_json_serializable(r) for r in por_faixa_etaria],
+                    "por_renda": [make_json_serializable(r) for r in por_renda]
+                }
+                return JSONResponse(content=payload)
+            else:
+                raise HTTPException(status_code=404, detail=f"Parquet e CSV fallback não encontrados no servidor")
 
         try:
             spark = get_spark()
