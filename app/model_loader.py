@@ -102,24 +102,57 @@ def load_sklearn_model(path: str) -> Any:
 def predict_sklearn(model_obj: Any, client: Dict[str, Any]) -> Dict[str, Any]:
     """Predict single client dict using sklearn model object produced by load_sklearn_model.
 
-    `client` is a mapping with keys for raw features (human-readable). We build a feature vector
-    matching `model_obj['feature_columns']` by selecting values or using 0 for missing dummies.
+    `client` is a mapping with keys for raw features (human-readable). 
+    Uses LabelEncoders stored in model_obj to transform categorical features.
     Returns a dict with 'prediction' and optional 'probability'.
     """
     import pandas as pd
+    import numpy as np
+    
     feature_cols: List[str] = model_obj.get('feature_columns') or []
     model_skl = model_obj.get('model')
+    encoders = model_obj.get('encoders', {})
+    categorical_cols = model_obj.get('categorical_cols', [])
+    numeric_cols = model_obj.get('numeric_cols', [])
+    
     if model_skl is None or not feature_cols:
         raise RuntimeError('Invalid sklearn model object')
 
-    row = pd.DataFrame([client])
-    row_enc = pd.get_dummies(row)
-
-    for c in feature_cols:
-        if c not in row_enc.columns:
-            row_enc[c] = 0
-
-    X = row_enc[feature_cols].astype(float)
+    # Constrói vetor de features
+    feature_values = []
+    
+    # Primeiro, as categóricas encodadas
+    for col in categorical_cols:
+        col_idx = col + "_idx"
+        if col_idx in feature_cols:
+            raw_value = client.get(col) or client.get(col.replace(' ', '_'))
+            if raw_value is None:
+                raw_value = '_MISSING_'
+            
+            # Usa o encoder treinado
+            encoder = encoders.get(col)
+            if encoder:
+                try:
+                    # Tenta transformar; se valor desconhecido, usa 0
+                    encoded = encoder.transform([str(raw_value)])[0]
+                except (ValueError, KeyError):
+                    # Valor não visto no treinamento
+                    encoded = 0
+                feature_values.append(encoded)
+            else:
+                feature_values.append(0)
+    
+    # Depois, as numéricas
+    for col in numeric_cols:
+        if col in feature_cols:
+            raw_value = client.get(col) or client.get(col.replace(' ', '_'))
+            try:
+                feature_values.append(float(raw_value) if raw_value is not None else 0.0)
+            except (ValueError, TypeError):
+                feature_values.append(0.0)
+    
+    X = np.array([feature_values])
+    
     proba = None
     if hasattr(model_skl, 'predict_proba'):
         proba = model_skl.predict_proba(X)[0].tolist()
