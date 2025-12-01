@@ -2,6 +2,10 @@ import json
 from typing import Any, Dict, List, Optional
 from pathlib import Path
 from app.config import MODEL_PATH, METADATA_PATH
+import os
+import logging
+import urllib.request
+import shutil
 
 
 # Lazy caches
@@ -71,7 +75,24 @@ def load_sklearn_model(path: str) -> Any:
       - 'feature_columns': list[str]
     """
     import joblib
+    logger = logging.getLogger(__name__)
     p = Path(path)
+
+    # If the file doesn't exist but a SKLEARN_MODEL_URL is configured, try to download it.
+    if not p.exists():
+        url = os.environ.get('SKLEARN_MODEL_URL')
+        if url:
+            try:
+                logger.info('SKLEARN_MODEL_PATH not found; attempting download from SKLEARN_MODEL_URL')
+                # ensure parent dir
+                p.parent.mkdir(parents=True, exist_ok=True)
+                # stream download to file
+                with urllib.request.urlopen(url) as resp, open(p, 'wb') as out_file:
+                    shutil.copyfileobj(resp, out_file)
+                logger.info('Downloaded sklearn model to %s', str(p))
+            except Exception as e:
+                logger.exception('Failed to download sklearn model from %s: %s', url, e)
+        # After attempted download, if still missing raise
     if not p.exists():
         raise FileNotFoundError(f'Sklearn model not found at {path}')
     obj = joblib.load(path)

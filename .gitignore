@@ -16,6 +16,7 @@ env/
 dataset_processado_opf.parquet
 /data/
 /outputs/
+/app/model
 /model/
 
 # PySpark / Hadoop

@@ -27,15 +27,22 @@ def _get_sklearn_model_if_configured():
     if not path:
         return None
     p = Path(path)
-    if not p.exists():
-        return None
 
+    # If cached and path matches, return cached object
     if _sklearn_cache['loaded'] and _sklearn_cache['path'] == str(p):
         return _sklearn_cache['obj']
 
-    obj = load_sklearn_model(str(p))
-    _sklearn_cache.update({'loaded': True, 'obj': obj, 'path': str(p)})
-    return obj
+    # Try loading (this will attempt to download if SKLEARN_MODEL_URL is set)
+    try:
+        obj = load_sklearn_model(str(p))
+        _sklearn_cache.update({'loaded': True, 'obj': obj, 'path': str(p)})
+        return obj
+    except FileNotFoundError:
+        logger.warning('SKLEARN_MODEL_PATH set but file not present and download failed: %s', path)
+        return None
+    except Exception:
+        logger.exception('Unexpected error loading sklearn model from %s', path)
+        return None
 
 
 def run_prediction(data: dict):
