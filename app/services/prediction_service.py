@@ -1,6 +1,6 @@
 from pyspark.sql import Row
 from app.model_loader import load_sklearn_model, predict_sklearn, get_spark_model, load_model_from
-from app.spark_session import spark
+from app.spark_session import get_spark
 from app.utils.feature_utils import extract_assembler_input_cols
 from app.utils.explanations import compute_global_importance
 import os
@@ -107,6 +107,7 @@ def run_prediction(data: dict):
         "Usa_app_banco": data.get("Usa_app_banco"),
     }
 
+    spark = get_spark()
     df = spark.createDataFrame([Row(**normalized_data)])
     out = spark_model.transform(df)
 

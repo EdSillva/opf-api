@@ -3,7 +3,7 @@ Endpoint para servir dados do dataset processado
 """
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
-from app.spark_session import spark
+from app.spark_session import get_spark
 from pyspark.sql.functions import col, sum as spark_sum
 import json
 import logging
@@ -101,6 +101,7 @@ def get_clients_data(limit: int = 1000, offset: int = 0):
     """
     try:
         # Carregar dados do parquet
+        spark = get_spark()
         df = spark.read.parquet("dataset_processado_opf.parquet")
 
         # Limitar número de registros (coletar até offset+limit e depois fatiar)
@@ -188,6 +189,7 @@ def get_statistics():
     Retorna estatísticas agregadas do dataset.
     """
     try:
+        spark = get_spark()
         df = spark.read.parquet("dataset_processado_opf.parquet")
 
         # Estatísticas gerais
