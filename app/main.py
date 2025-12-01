@@ -14,6 +14,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        "https://opf-api.onrender.com", # Produção Render
         "http://localhost:5173",  # Vite dev server
         "http://localhost:3000",  # Alternativa
         "http://127.0.0.1:5173",
