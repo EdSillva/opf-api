@@ -141,6 +141,28 @@ Acesse a documentação interativa em:
 - Armazene modelos/dados grandes em um storage (S3/GCS/Blob). No startup da API, faça o download para um diretório temporário ou monte um volume.
 - Para configurar variáveis de ambiente sensíveis (DB, S3 credentials), use secrets do provedor de deploy (ex.: GitHub Actions secrets, variables no Heroku/Render/Cloud Run).
 
+## Exportar features e treinar um modelo sklearn (opção leve para deploy)
+
+Se você prefere não carregar Spark em produção (ex.: Render), siga este fluxo:
+
+1. Use `scripts/export_features.py` para exportar as features transformadas para CSV. Ajuste `FEATURE_COLUMNS` no script conforme necessário:
+
+```bash
+python scripts/export_features.py
+# ou passando variável de output
+OUT_CSV=data/features.csv python scripts/export_features.py
+```
+
+2. Treine um modelo scikit-learn e salve como joblib:
+
+```bash
+INPUT_CSV=data/features.csv OUT_MODEL=app/model/sk_model.joblib python scripts/train_sklearn.py
+```
+
+O artefato salvo contém `{'model': estimator, 'feature_columns': [...]}`.
+
+3. Configure a API para usar o modelo sklearn definindo a variável de ambiente `SKLEARN_MODEL_PATH` apontando para `app/model/sk_model.joblib` no ambiente de produção. A API expõe `/predict/sklearn` para predições em JSON.
+
 ### Rodando em produção com Docker (exemplo)
 
 Dockerfile (exemplo simplificado):
@@ -156,3 +178,33 @@ CMD ["python", "run.py"]
 ```
 
 No pipeline de CI, preencha os secrets e, se necessário, baixe o modelo do storage antes de iniciar a API.
+
+## Deploy no Render (opção com Docker)
+
+Você pode usar o `Dockerfile.sklearn` para criar uma imagem leve e rodar no Render como um Web Service.
+
+Passos resumidos:
+
+1. Crie o `sk_model.joblib` localmente usando `scripts/train_sklearn.py` (veja seção anterior).
+2. Copie `app/model/sk_model.joblib` para o repositório ou deixe um passo no build para baixá-lo de um storage.
+3. No dashboard do Render, crie um novo "Web Service" e aponte para seu repositório Git.
+
+- Build Command: deixe em branco (Render detecta Dockerfile) ou `docker build -t opf-api .`
+- Start Command: deixe em branco se usar Dockerfile (Render executa o CMD do Dockerfile)
+
+4. Adicione as variáveis de ambiente necessárias no painel do serviço:
+
+- `SKLEARN_MODEL_PATH`: caminho interno para o joblib (ex: `/app/app/model/sk_model.joblib`) — se o modelo estiver no repositório.
+- `PORT`: Render define automaticamente `PORT`, o `Dockerfile.sklearn` já usa essa variável.
+
+5. Configure `Health Check` apontando para `/` ou `/docs`.
+
+Opções de armazenamento do modelo:
+
+- Commitar o `sk_model.joblib` no repositório: simples, porém não recomendado para modelos grandes.
+- Fazer upload para um storage (S3/GCS) e baixar no build/entrypoint: mais profissional; adicione um script para baixar antes de iniciar a API.
+
+Observações específicas para Render:
+
+- Render fornece `PORT` automaticamente. O `Dockerfile.sklearn` usa essa variável.
+- Se preferir não usar Docker, você pode usar o Deploy Automatico do Render a partir do repo (build usando `pip install -r requirements.txt`), mas verifique que `SKLEARN_MODEL_PATH` aponte para um arquivo presente no container.

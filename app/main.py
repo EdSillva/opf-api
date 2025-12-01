@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.routes.predict import router as predict_router
 from app.routes.data import router as data_router
+from app.routes.predict_sklearn import router as predict_sklearn_router
 
 app = FastAPI(
     title="OpenFinance ML API",
@@ -25,6 +26,7 @@ app.add_middleware(
 # Registrar rotas
 app.include_router(predict_router, prefix="/predict", tags=["Predictions"])
 app.include_router(data_router, prefix="/data", tags=["Data"])
+app.include_router(predict_sklearn_router, prefix="/predict", tags=["Predictions"])
 
 @app.get("/", tags=["Health"])
 def root():

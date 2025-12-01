@@ -113,7 +113,7 @@ def get_clients_data(limit: int = 1000, offset: int = 0):
             'Faixa etária',
             'Sexo',
             'Escolaridade',
-               'Renda',
+            'Renda',
             'Gp renda',
             'Gp gasto mensal',
             'Gp score de crédito',
