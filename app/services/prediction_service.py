@@ -5,15 +5,14 @@ from app.utils.feature_utils import extract_assembler_input_cols
 from app.utils.explanations import compute_global_importance
 import os
 from pathlib import Path
+import logging
 
+logger = logging.getLogger(__name__)
 
-_spark_model = get_spark_model()
-feature_names = []
-if _spark_model is not None:
-    try:
-        feature_names = extract_assembler_input_cols(_spark_model)
-    except Exception:
-        feature_names = []
+# Do not load the spark model at import time to avoid starting JVM on import.
+_spark_model = None
+_spark_model_checked = False
+_feature_names_cache = []
 
 # Cache sklearn model object to avoid repeated loads
 _sklearn_cache = {
@@ -79,7 +78,17 @@ def run_prediction(data: dict):
         }
 
     # Caso contrário, usa Spark pipeline
-    spark_model = _spark_model or get_spark_model()
+    global _spark_model, _spark_model_checked
+    if _spark_model is None and not _spark_model_checked:
+        try:
+            _spark_model = get_spark_model()
+        except Exception:
+            logger.exception('Falha ao tentar carregar Spark model')
+            _spark_model = None
+        finally:
+            _spark_model_checked = True
+
+    spark_model = _spark_model
     if spark_model is None:
         # Nenhum modelo disponível
         raise RuntimeError('Nenhum modelo disponível: configure SKLEARN_MODEL_PATH ou garanta MODEL_PATH com pipeline Spark')
@@ -129,12 +138,30 @@ def run_explanations(data: dict):
     if skl is not None:
         model = skl
     else:
-        # Usa Spark model
-        model = _spark_model or get_spark_model()
+        # Usa Spark model (lazy)
+        global _spark_model, _spark_model_checked, _feature_names_cache
+        if _spark_model is None and not _spark_model_checked:
+            try:
+                _spark_model = get_spark_model()
+            except Exception:
+                logger.exception('Falha ao tentar carregar Spark model')
+                _spark_model = None
+            finally:
+                _spark_model_checked = True
+
+        model = _spark_model
         if model is None:
             raise RuntimeError('Nenhum modelo disponível: configure SKLEARN_MODEL_PATH ou garanta MODEL_PATH com pipeline Spark')
-    
-    global_imp = compute_global_importance(model, feature_names)
+
+        # compute feature names lazily
+        try:
+            if not _feature_names_cache:
+                _feature_names_cache = extract_assembler_input_cols(model)
+        except Exception:
+            logger.exception('Falha ao extrair feature names do modelo Spark')
+            _feature_names_cache = []
+
+    global_imp = compute_global_importance(model, _feature_names_cache)
     return {
         "global_feature_importances": global_imp
     }

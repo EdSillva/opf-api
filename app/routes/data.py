@@ -11,6 +11,7 @@ import traceback
 import numpy as np
 import pandas as pd
 import datetime
+import os
 
 router = APIRouter()
 logging.basicConfig(level=logging.INFO)
@@ -101,8 +102,9 @@ def get_clients_data(limit: int = 1000, offset: int = 0):
     """
     try:
         # Carregar dados do parquet
+        parquet_path = os.environ.get('PARQUET_PATH', 'dataset_processado_opf.parquet')
         spark = get_spark()
-        df = spark.read.parquet("dataset_processado_opf.parquet")
+        df = spark.read.parquet(parquet_path)
 
         # Limitar número de registros (coletar até offset+limit e depois fatiar)
         end = offset + limit
@@ -169,17 +171,21 @@ def get_clients_data(limit: int = 1000, offset: int = 0):
         }
         return JSONResponse(content=payload)
     except FileNotFoundError:
-        logger.exception("Parquet file not found")
+        logger.exception("Parquet file not found at path: %s", parquet_path)
         raise HTTPException(
             status_code=404,
-            detail="Arquivo dataset_processado_opf.parquet não encontrado"
+            detail=f"Arquivo {parquet_path} não encontrado"
         )
     except Exception as e:
-        # Log completo para diagnóstico
-        logger.error("Erro no endpoint /clients: %s", traceback.format_exc())
+        # Log completo para diagnóstico com traceback e a carga do ambiente
+        tb = traceback.format_exc()
+        logger.error("Erro no endpoint /clients: %s", tb)
+        # Provide a hint in the response to inspect server logs with a simple id
+        err_id = abs(hash(tb)) % (10 ** 8)
+        logger.error("Erro ID: %s", err_id)
         raise HTTPException(
             status_code=500,
-            detail=f"Erro ao processar dados: {str(e)}"
+            detail=f"Erro ao processar dados (id={err_id}). Verifique os logs do servidor."
         )
 
 
@@ -189,8 +195,9 @@ def get_statistics():
     Retorna estatísticas agregadas do dataset.
     """
     try:
+        parquet_path = os.environ.get('PARQUET_PATH', 'dataset_processado_opf.parquet')
         spark = get_spark()
-        df = spark.read.parquet("dataset_processado_opf.parquet")
+        df = spark.read.parquet(parquet_path)
 
         # Estatísticas gerais
         total = df.count()
@@ -232,9 +239,15 @@ def get_statistics():
             "por_renda": por_renda
         }
         return JSONResponse(content=payload)
+    except FileNotFoundError:
+        logger.exception("Parquet file not found at path: %s", parquet_path)
+        raise HTTPException(status_code=404, detail=f"Arquivo {parquet_path} não encontrado")
     except Exception as e:
-        logger.error("Erro no endpoint /stats: %s", traceback.format_exc())
+        tb = traceback.format_exc()
+        logger.error("Erro no endpoint /stats: %s", tb)
+        err_id = abs(hash(tb)) % (10 ** 8)
+        logger.error("Erro ID: %s", err_id)
         raise HTTPException(
             status_code=500,
-            detail=f"Erro ao calcular estatísticas: {str(e)}"
+            detail=f"Erro ao calcular estatísticas (id={err_id}). Verifique os logs do servidor."
         )

@@ -34,3 +34,14 @@ def root():
         "docs": "/docs"
     }
 
+
+# Log environment on startup to help diagnose production issues
+@app.on_event("startup")
+def log_startup():
+    import os
+    logger = __import__('logging').getLogger(__name__)
+    logger.info("Starting OpenFinance ML API")
+    logger.info("ENV: SKLEARN_MODEL_PATH=%s", os.environ.get('SKLEARN_MODEL_PATH'))
+    logger.info("ENV: MODEL_PATH=%s", os.environ.get('MODEL_PATH'))
+    logger.info("ENV: PARQUET_PATH=%s", os.environ.get('PARQUET_PATH'))
+
