@@ -13,21 +13,18 @@ app = FastAPI(
 # Configurar CORS para permitir requisições do frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://open-finance-app.onrender.com", # Produção Render
-        "http://localhost:5173",  # Vite dev server
-        "http://localhost:3000",  # Alternativa
-        "http://127.0.0.1:5173",
-    ],
-    allow_credentials=True,
+    allow_origins=["*"],  # Allow all origins (adjust for production)
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # Registrar rotas
-app.include_router(predict_router, prefix="/predict/sklearn", tags=["Predictions"])
-app.include_router(data_router, prefix="/data", tags=["Data"])
+# rota principal de predição (Spark pipeline or sklearn via service chooser)
+app.include_router(predict_router, prefix="/predict", tags=["Predictions"])
+# rota sklearn específica (acessível em /predict/sklearn)
 app.include_router(predict_sklearn_router, prefix="/predict", tags=["Predictions"])
+app.include_router(data_router, prefix="/data", tags=["Data"])
 
 @app.get("/", tags=["Health"])
 def root():
