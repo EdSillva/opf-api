@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 import datetime
 import os
+import os
 
 router = APIRouter()
 logging.basicConfig(level=logging.INFO)
@@ -103,8 +104,57 @@ def get_clients_data(limit: int = 1000, offset: int = 0):
     try:
         # Carregar dados do parquet
         parquet_path = os.environ.get('PARQUET_PATH', 'dataset_processado_opf.parquet')
-        spark = get_spark()
-        df = spark.read.parquet(parquet_path)
+
+        # Quick checks: ensure parquet file exists on disk before trying to start Spark
+        if not os.path.exists(parquet_path):
+            logger.error("Parquet file not found at path: %s", parquet_path)
+            raise HTTPException(status_code=404, detail=f"Arquivo {parquet_path} não encontrado no servidor")
+
+        # try importing pyspark availability via get_spark (which lazy-imports pyspark)
+        try:
+            spark = get_spark()
+            df = spark.read.parquet(parquet_path)
+        except ModuleNotFoundError as e:
+            logger.exception('PySpark not available in runtime: %s', str(e))
+            # try CSV fallback
+            csv_path = os.environ.get('PARQUET_FALLBACK_CSV', 'data/features.csv')
+            if os.path.exists(csv_path):
+                logger.info('Using CSV fallback for clients: %s', csv_path)
+                pdf = pd.read_csv(csv_path)
+                # select only the needed columns that exist
+                needed_cols = [
+                    'Estado', 'Faixa etária', 'Sexo', 'Escolaridade', 'Renda', 'Gp renda',
+                    'Gp gasto mensal', 'Gp score de crédito', 'Adesao_ao_OPF', 'Usa_pix',
+                    'Usa_eBanking', 'Usa_app_banco'
+                ]
+                existing_cols = [c for c in needed_cols if c in pdf.columns]
+                rows = pdf[existing_cols].iloc[offset:offset+limit].to_dict(orient='records')
+                data = []
+                for rec in rows:
+                    rec_js = make_json_serializable(rec)
+                    underscored = {k.replace(' ', '_'): v for k, v in rec_js.items()}
+                    if isinstance(rec_js, dict):
+                        rec_js.update(underscored)
+                    data.append(rec_js)
+
+                total = int(len(pdf))
+                aderiu = int(pdf['Adesao_ao_OPF'].fillna(0).astype(int).sum()) if 'Adesao_ao_OPF' in pdf.columns else 0
+                nao_aderiu = total - aderiu
+
+                payload = {
+                    "success": True,
+                    "total_records": int(total),
+                    "returned_records": int(len(data)),
+                    "statistics": {
+                        "total": int(total),
+                        "aderiu": int(aderiu),
+                        "nao_aderiu": int(nao_aderiu),
+                        "taxa_adesao": round((aderiu / total) * 100, 2) if total > 0 else 0
+                    },
+                    "data": data
+                }
+                return JSONResponse(content=payload)
+            raise HTTPException(status_code=503, detail="PySpark não está disponível neste ambiente e CSV fallback não encontrado.")
 
         # Limitar número de registros (coletar até offset+limit e depois fatiar)
         end = offset + limit
@@ -170,11 +220,19 @@ def get_clients_data(limit: int = 1000, offset: int = 0):
             "data": data
         }
         return JSONResponse(content=payload)
-    except FileNotFoundError:
-        logger.exception("Parquet file not found at path: %s", parquet_path)
+    except HTTPException:
+        # re-raise HTTPException (404/503) raised above
+        raise
+    except Exception as e:
+        # Log completo para diagnóstico com traceback e a carga do ambiente
+        tb = traceback.format_exc()
+        logger.error("Erro no endpoint /clients: %s", tb)
+        # Provide a hint in the response to inspect server logs with a simple id
+        err_id = abs(hash(tb)) % (10 ** 8)
+        logger.error("Erro ID: %s", err_id)
         raise HTTPException(
-            status_code=404,
-            detail=f"Arquivo {parquet_path} não encontrado"
+            status_code=500,
+            detail=f"Erro ao processar dados (id={err_id}). Verifique os logs do servidor."
         )
     except Exception as e:
         # Log completo para diagnóstico com traceback e a carga do ambiente
@@ -196,7 +254,17 @@ def get_statistics():
     """
     try:
         parquet_path = os.environ.get('PARQUET_PATH', 'dataset_processado_opf.parquet')
-        spark = get_spark()
+
+        if not os.path.exists(parquet_path):
+            logger.error("Parquet file not found at path: %s", parquet_path)
+            raise HTTPException(status_code=404, detail=f"Arquivo {parquet_path} não encontrado no servidor")
+
+        try:
+            spark = get_spark()
+        except ModuleNotFoundError as e:
+            logger.exception('PySpark not available in runtime: %s', str(e))
+            raise HTTPException(status_code=503, detail="PySpark não está disponível neste ambiente. Configure SKLEARN_MODEL_PATH ou use uma imagem com Spark.")
+
         df = spark.read.parquet(parquet_path)
 
         # Estatísticas gerais
@@ -204,10 +272,56 @@ def get_statistics():
         aderiu = df.filter(col("Adesao_ao_OPF") == 1).count()
         
         # Agrupar por estado com informações de adesão
-        estados_df = df.groupBy("Estado").agg(
-            spark_sum(col("Adesao_ao_OPF").cast("int")).alias("aderiu"),
-            (spark_sum((1 - col("Adesao_ao_OPF")).cast("int"))).alias("nao_aderiu")
-        ).toPandas()
+        try:
+            estados_df = df.groupBy("Estado").agg(
+                spark_sum(col("Adesao_ao_OPF").cast("int")).alias("aderiu"),
+                (spark_sum((1 - col("Adesao_ao_OPF")).cast("int"))).alias("nao_aderiu")
+            ).toPandas()
+        except Exception:
+            # If Spark operations fail, attempt CSV fallback
+            csv_path = os.environ.get('PARQUET_FALLBACK_CSV', 'data/features.csv')
+            if os.path.exists(csv_path):
+                logger.info('Using CSV fallback for stats: %s', csv_path)
+                pdf = pd.read_csv(csv_path)
+                total = int(len(pdf))
+                aderiu = int(pdf['Adesao_ao_OPF'].fillna(0).astype(int).sum()) if 'Adesao_ao_OPF' in pdf.columns else 0
+                nao_aderiu = total - aderiu
+
+                por_estado = []
+                if 'Estado' in pdf.columns:
+                    grp = pdf.groupby('Estado')
+                    for k, g in grp:
+                        ader = int(g['Adesao_ao_OPF'].fillna(0).astype(int).sum()) if 'Adesao_ao_OPF' in g.columns else 0
+                        nao = int(len(g) - ader)
+                        por_estado.append({'Estado': k, 'aderiu': int(ader), 'nao_aderiu': int(nao), 'count': int(len(g))})
+
+                # faixa etaria
+                por_faixa_etaria = []
+                if 'Faixa etária' in pdf.columns:
+                    fe = pdf['Faixa etária'].value_counts().to_dict()
+                    por_faixa_etaria = [{'Faixa etária': k, 'count': int(v)} for k, v in fe.items()]
+
+                # renda
+                por_renda = []
+                if 'Gp renda' in pdf.columns and 'Adesao_ao_OPF' in pdf.columns:
+                    grp = pdf.groupby(['Gp renda', 'Adesao_ao_OPF']).size().reset_index(name='count')
+                    por_renda = grp.to_dict(orient='records')
+
+                payload = {
+                    "success": True,
+                    "geral": {
+                        "total_clientes": int(total),
+                        "aderiu": int(aderiu),
+                        "nao_aderiu": int(nao_aderiu),
+                        "taxa_adesao": round((aderiu / total) * 100, 2) if total > 0 else 0
+                    },
+                    "por_estado": [make_json_serializable(r) for r in por_estado],
+                    "por_faixa_etaria": [make_json_serializable(r) for r in por_faixa_etaria],
+                    "por_renda": [make_json_serializable(r) for r in por_renda]
+                }
+                return JSONResponse(content=payload)
+            # if no CSV fallback, re-raise original exception
+            raise
 
         # Adicionar count total
         estados_df['count'] = estados_df['aderiu'] + estados_df['nao_aderiu']
