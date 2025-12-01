@@ -143,30 +143,34 @@ def run_explanations(data: dict):
     # Tenta sklearn primeiro
     skl = _get_sklearn_model_if_configured()
     if skl is not None:
-        model = skl
-    else:
-        # Usa Spark model (lazy)
-        global _spark_model, _spark_model_checked, _feature_names_cache
-        if _spark_model is None and not _spark_model_checked:
-            try:
-                _spark_model = get_spark_model()
-            except Exception:
-                logger.exception('Falha ao tentar carregar Spark model')
-                _spark_model = None
-            finally:
-                _spark_model_checked = True
-
-        model = _spark_model
-        if model is None:
-            raise RuntimeError('Nenhum modelo disponível: configure SKLEARN_MODEL_PATH ou garanta MODEL_PATH com pipeline Spark')
-
-        # compute feature names lazily
+        feature_names = skl.get('feature_columns', [])
+        global_imp = compute_global_importance(skl, feature_names)
+        return {
+            "global_feature_importances": global_imp
+        }
+    
+    # Usa Spark model (lazy)
+    global _spark_model, _spark_model_checked, _feature_names_cache
+    if _spark_model is None and not _spark_model_checked:
         try:
-            if not _feature_names_cache:
-                _feature_names_cache = extract_assembler_input_cols(model)
+            _spark_model = get_spark_model()
         except Exception:
-            logger.exception('Falha ao extrair feature names do modelo Spark')
-            _feature_names_cache = []
+            logger.exception('Falha ao tentar carregar Spark model')
+            _spark_model = None
+        finally:
+            _spark_model_checked = True
+
+    model = _spark_model
+    if model is None:
+        raise RuntimeError('Nenhum modelo disponível: configure SKLEARN_MODEL_PATH ou garanta MODEL_PATH com pipeline Spark')
+
+    # compute feature names lazily
+    try:
+        if not _feature_names_cache:
+            _feature_names_cache = extract_assembler_input_cols(model)
+    except Exception:
+        logger.exception('Falha ao extrair feature names do modelo Spark')
+        _feature_names_cache = []
 
     global_imp = compute_global_importance(model, _feature_names_cache)
     return {
